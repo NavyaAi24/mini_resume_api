@@ -1,101 +1,100 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form
+import sqlite3
 import os
-import shutil
 
 app = FastAPI()
 
-# Store candidates in memory (simple list)
-candidates = []
-current_id = 1
-
-# Create resumes folder if it does not exist
+# create resumes folder
 if not os.path.exists("resumes"):
     os.makedirs("resumes")
 
+# connect database
+conn = sqlite3.connect("candidates.db", check_same_thread=False)
+cursor = conn.cursor()
 
-# 1️. Upload Candidate
+# create table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS candidates(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+full_name TEXT,
+experience INTEGER,
+skills TEXT,
+resume_file TEXT
+)
+""")
+
+conn.commit()
+
+
+# Upload candidate
 @app.post("/upload")
 def upload_candidate(
     full_name: str = Form(...),
-    dob: str = Form(...),
-    contact_number: str = Form(...),
-    contact_address: str = Form(...),
-    education: str = Form(...),
-    graduation_year: int = Form(...),
     experience: int = Form(...),
     skills: str = Form(...),
     resume: UploadFile = File(...)
 ):
-    global current_id
 
     file_path = f"resumes/{resume.filename}"
 
-    # Save file
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(resume.file, buffer)
+    with open(file_path, "wb") as f:
+        f.write(resume.file.read())
 
-    # Create candidate dictionary
-    candidate = {
-        "id": current_id,
-        "full_name": full_name,
-        "dob": dob,
-        "contact_number": contact_number,
-        "contact_address": contact_address,
-        "education": education,
-        "graduation_year": graduation_year,
-        "experience": experience,
-        "skills": skills,
-        "resume_file": file_path
-    }
+    cursor.execute(
+        "INSERT INTO candidates(full_name,experience,skills,resume_file) VALUES(?,?,?,?)",
+        (full_name, experience, skills, file_path)
+    )
 
-    candidates.append(candidate)
-    current_id += 1
+    conn.commit()
 
-    return {
-        "message": "Candidate uploaded successfully",
-        "candidate": candidate
-    }
+    return {"message": "Candidate uploaded successfully"}
 
 
-# 2️. List Candidates (with optional filters)
+# List all candidates
 @app.get("/candidates")
-def list_candidates(
-    skill: str = None,
-    experience: int = None,
-    graduation_year: int = None
-):
-    results = candidates
+def list_candidates():
 
-    if skill:
-        results = [c for c in results if skill.lower() in c["skills"].lower()]
+    cursor.execute("SELECT * FROM candidates")
+    rows = cursor.fetchall()
 
-    if experience:
-        results = [c for c in results if c["experience"] == experience]
+    candidates = []
 
-    if graduation_year:
-        results = [c for c in results if c["graduation_year"] == graduation_year]
+    for r in rows:
+        candidates.append({
+            "id": r[0],
+            "full_name": r[1],
+            "experience": r[2],
+            "skills": r[3],
+            "resume_file": r[4]
+        })
 
-    return results
-
-
-# 3️. Get Candidate by ID
-@app.get("/candidates/{candidate_id}")
-def get_candidate(candidate_id: int):
-    for candidate in candidates:
-        if candidate["id"] == candidate_id:
-            return candidate
-
-    raise HTTPException(status_code=404, detail="Candidate not found")
+    return candidates
 
 
-# 4️. Delete Candidate
-@app.delete("/candidates/{candidate_id}")
-def delete_candidate(candidate_id: int):
-    global candidates
+# Get candidate by ID
+@app.get("/candidates/{id}")
+def get_candidate(id: int):
 
-    for candidate in candidates:
-        if candidate["id"] == candidate_id:
-            candidates.remove(candidate)
-            return {"message": "Candidate deleted successfully"}
+    cursor.execute("SELECT * FROM candidates WHERE id=?", (id,))
+    r = cursor.fetchone()
 
-    raise HTTPException(status_code=404, detail="Candidate not found")
+    if r:
+        return {
+            "id": r[0],
+            "full_name": r[1],
+            "experience": r[2],
+            "skills": r[3],
+            "resume_file": r[4]
+        }
+
+    return {"message": "Candidate not found"}
+
+
+# Delete candidate
+@app.delete("/candidates/{id}")
+def delete_candidate(id: int):
+
+    cursor.execute("DELETE FROM candidates WHERE id=?", (id,))
+    conn.commit()
+
+    return {"message": "Candidate deleted"}
